@@ -93,6 +93,7 @@
       <div class="bars" id="bars"></div>
       <div class="controls">
         <button id="camBtn">📷 카메라 켜기</button>
+        <button id="flipBtn" style="display:none">🔄 전면/후면 전환</button>
         <label class="btn" for="file">🖼️ 사진 올리기 / 찍기</label>
         <input type="file" id="file" accept="image/*" capture="environment">
       </div>
@@ -200,7 +201,7 @@ function drawSquare(el, w, h, mirror){
 
 function predict(){
   if(!model || !source) return null;
-  if(source==="cam"){ if(!video.videoWidth) return null; drawSquare(video, video.videoWidth, video.videoHeight, true); }
+  if(source==="cam"){ if(!video.videoWidth) return null; drawSquare(video, video.videoWidth, video.videoHeight, facing==="user"); }
   else drawSquare(photo, photo.naturalWidth, photo.naturalHeight, false);
   const probs = tf.tidy(()=>{
     const x = tf.browser.fromPixels(work).toFloat().div(127).sub(1).expandDims(0);
@@ -221,16 +222,44 @@ function liveLoop(){
   live=requestAnimationFrame(step);
 }
 
-$("camBtn").onclick = async ()=>{
+let facing = "user";   // "user" = 전면, "environment" = 후면
+function stopCam(){
+  if(video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
+}
+async function startCam(mode){
+  stopCam();
+  let stream;
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:640,height:480},audio:false});
-    video.srcObject=stream; await video.play();
-    video.style.display="block"; photo.style.display="none"; $("empty").style.display="none";
-    source="cam"; $("modeLabel").textContent="카메라 — 실시간 인식";
-    $("playBtn").disabled=!model; statusEl.textContent="물건을 카메라에 비추고 '가위! 바위! 보!'를 누르세요.";
-    liveLoop();
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:mode},width:640,height:480},audio:false});
   }catch(e){
+    // exact가 안 되는 기기(노트북 등)는 일반 요청으로 다시 시도
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:mode,width:640,height:480},audio:false});
+  }
+  facing = mode;
+  video.srcObject=stream; await video.play();
+  video.style.transform = facing==="user" ? "scaleX(-1)" : "none";
+  video.style.display="block"; photo.style.display="none"; $("empty").style.display="none";
+  $("flipBtn").style.display="inline-block";
+  $("modeLabel").textContent = (facing==="user"?"전면":"후면") + " 카메라 — 실시간 인식";
+  if(source!=="cam"){ source="cam"; liveLoop(); }
+  $("playBtn").disabled=!model;
+  statusEl.textContent="물건을 카메라에 비추고 '가위! 바위! 보!'를 누르세요.";
+}
+
+$("camBtn").onclick = async ()=>{
+  try{ await startCam(facing); }
+  catch(e){
     statusEl.textContent="이 화면에서는 카메라를 쓸 수 없어요. '사진 올리기 / 찍기'로 물건 사진을 올려 주세요.";
+  }
+};
+
+$("flipBtn").onclick = async ()=>{
+  if(busy) return;
+  const next = facing==="user" ? "environment" : "user";
+  try{ await startCam(next); }
+  catch(e){
+    statusEl.textContent="다른 쪽 카메라를 찾지 못했어요. 이 기기에는 카메라가 하나뿐일 수 있어요.";
+    try{ await startCam(facing); }catch(_){}
   }
 };
 
@@ -238,7 +267,7 @@ $("file").onchange = e=>{
   const f=e.target.files[0]; if(!f) return;
   const url=URL.createObjectURL(f);
   photo.onload=()=>{
-    if(video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
+    stopCam(); $("flipBtn").style.display="none";
     video.style.display="none"; photo.style.display="block"; $("empty").style.display="none";
     source="photo"; $("modeLabel").textContent="사진";
     predict(); $("playBtn").disabled=!model;
